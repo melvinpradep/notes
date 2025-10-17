@@ -32,3 +32,34 @@ func (b *JMXBuilder) SetBody(p string) error {
     b.Ctx.API.BFile = p
     return nil
 }
+
+
+func (b *JMXBuilder) SetBody(p string) error {
+    data, err := os.ReadFile(p)
+    if err != nil {
+        return fmt.Errorf("failed to read body file: %w", err)
+    }
+
+    // Parse to verify JSON validity
+    var body interface{}
+    if err := json.Unmarshal(data, &body); err != nil {
+        return fmt.Errorf("invalid JSON body: %w", err)
+    }
+
+    // Re-marshal (prettify JSON)
+    jsonBytes, err := json.MarshalIndent(body, "", "  ")
+    if err != nil {
+        return fmt.Errorf("failed to format body: %w", err)
+    }
+
+    // Escape for XML safety
+    var buf bytes.Buffer
+    if err := xml.EscapeText(&buf, jsonBytes); err != nil {
+        return fmt.Errorf("failed to escape body: %w", err)
+    }
+
+    // Store only escaped string in context
+    b.Ctx.API.BodyEscaped = buf.String()
+    b.Ctx.API.BFile = p
+    return nil
+}
