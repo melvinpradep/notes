@@ -1,96 +1,88 @@
+package generator_test
 
 import (
-    "encoding/json"
-    "fmt"
-    "os"
+	"strings"
+	"testing"
+
+	"jmxgen-stephandler-nested/internal/generator"
 )
 
-func (b *JMXBuilder) SetHeaders(p string) error {
-    data, err := os.ReadFile(p)
-    if err != nil {
-        return fmt.Errorf("failed to read headers: %w", err)
-    }
-    var headers map[string]interface{}
-    if err := json.Unmarshal(data, &headers); err != nil {
-        return fmt.Errorf("invalid header JSON: %w", err)
-    }
-    b.Ctx.API.Headers = headers
-    b.Ctx.API.HFile = p
-    return nil
-}
+// TestSetBody ensures SetBody correctly formats and escapes JSON to JMeter style.
+func TestSetBody(t *testing.T) {
+	b := generator.NewJMXBuilder()
 
-func (b *JMXBuilder) SetBody(p string) error {
-    data, err := os.ReadFile(p)
-    if err != nil {
-        return fmt.Errorf("failed to read body: %w", err)
-    }
-    var body interface{}
-    if err := json.Unmarshal(data, &body); err != nil {
-        return fmt.Errorf("invalid body JSON: %w", err)
-    }
-    b.Ctx.API.Body = body
-    b.Ctx.API.BFile = p
-    return nil
-}
+	path := "test_body.json"
+	json := `{
+	  "query": "<a&b>",
+	  "user": {
+	    "name": "John",
+	    "roles": ["admin", "test"]
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(json), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	defer os.Remove(path)
 
-
-func (b *JMXBuilder) SetBody(p string) error {
-    data, err := os.ReadFile(p)
-    if err != nil {
-        return fmt.Errorf("failed to read body file: %w", err)
-    }
-
-    // Parse to verify JSON validity
-    var body interface{}
-    if err := json.Unmarshal(data, &body); err != nil {
-        return fmt.Errorf("invalid JSON body: %w", err)
-    }
-
-    // Re-marshal (prettify JSON)
-    jsonBytes, err := json.MarshalIndent(body, "", "  ")
-    if err != nil {
-        return fmt.Errorf("failed to format body: %w", err)
-    }
-
-    // Escape for XML safety
-    var buf bytes.Buffer
-    if err := xml.EscapeText(&buf, jsonBytes); err != nil {
-        return fmt.Errorf("failed to escape body: %w", err)
-    }
-
-    // Store only escaped string in context
-    b.Ctx.API.BodyEscaped = buf.String()
-    b.Ctx.API.BFile = p
-    return nil
-}
-
-
-func toJMeterEscapedJSON(jsonStr string) string {
-	// Parse and reformat to pretty JSON
-	var body interface{}
-	if err := json.Unmarshal([]byte(jsonStr), &body); err != nil {
-		return fmt.Sprintf("invalid JSON: %v", err)
+	if err := b.SetBody(path); err != nil {
+		t.Fatalf("SetBody() error = %v", err)
 	}
 
-	formatted, err := json.MarshalIndent(body, "", "  ")
+	got := b.Ctx.API.BodyEscaped
+	wantSubstrings := []string{
+		"&quot;query&quot;",
+		"&lt;a&amp;b&gt;",
+		"&#xd;",
+	}
+
+	for _, sub := range wantSubstrings {
+		if !strings.Contains(got, sub) {
+			t.Errorf("expected escaped body to contain %q\nGot:\n%s", sub, got)
+		}
+	}
+}
+
+// TestSetRequest verifies method and path are captured correctly.
+func TestSetRequest(t *testing.T) {
+	b := generator.NewJMXBuilder()
+	if err := b.SetRequest("post", "/user/test"); err != nil {
+		t.Fatalf("SetRequest() failed: %v", err)
+	}
+
+	if b.Ctx.API.Method != "POST" {
+		t.Errorf("expected method POST, got %s", b.Ctx.API.Method)
+	}
+	if b.Ctx.API.Path != "/user/test" {
+		t.Errorf("expected path /user/test, got %s", b.Ctx.API.Path)
+	}
+}
+
+// TestSetDuration verifies duration conversion to seconds.
+func TestSetDuration(t *testing.T) {
+	b := generator.NewJMXBuilder()
+	if err := b.SetDuration(5); err != nil {
+		t.Fatalf("SetDuration() failed: %v", err)
+	}
+	if b.Ctx.Perf.DurSec != 300 {
+		t.Errorf("expected 300 seconds, got %d", b.Ctx.Perf.DurSec)
+	}
+}
+
+// TestBuild ensures JMX template rendering works with basic data.
+func TestBuild(t *testing.T) {
+	b := generator.NewJMXBuilder()
+	b.Ctx.Perf.DurSec = 300
+	b.Ctx.API.Host = "https://example.com"
+	b.Ctx.API.Method = "POST"
+	b.Ctx.API.Path = "/test"
+	b.Ctx.API.BodyEscaped = `{&quot;msg&quot;:&quot;ok&quot;}`
+
+	out, err := b.Build()
 	if err != nil {
-		return fmt.Sprintf("marshal failed: %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
-	s := string(formatted)
-
-	// Manual replacements to mimic JMeter output:
-	replacer := strings.NewReplacer(
-		`&`, "&amp;",
-		`<`, "&lt;",
-		`>`, "&gt;",
-		`"`, "&quot;",
-		"\r", "",
-		"\n", "&#xd;\n",
-	)
-	s = replacer.Replace(s)
-	s = strings.TrimSpace(s)
-
-	return s
+	if !strings.Contains(out, "HTTPSamplerProxy") {
+		t.Errorf("expected Build output to contain HTTPSamplerProxy")
+	}
 }
-
