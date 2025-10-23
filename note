@@ -1,66 +1,9 @@
-package steps_test
+	if len(mockCtx.registeredSteps) != len(expectedPatterns) {
+		t.Fatalf("expected %d steps, got %d", len(expectedPatterns), len(mockCtx.registeredSteps))
+	}
 
-import (
-    "testing"
-
-    "github.com/cucumber/godog"
-    "jmxgen-stephandler-nested/internal/generator"
-    "jmxgen-stephandler-nested/internal/steps"
-)
-
-// mockScenarioContext allows us to capture which regexes and funcs were registered.
-type mockScenarioContext struct {
-    steps map[string]interface{}
-}
-
-func (m *mockScenarioContext) Step(expr interface{}, stepFunc interface{}) {
-    if m.steps == nil {
-        m.steps = make(map[string]interface{})
-    }
-    m.steps[expr.(string)] = stepFunc
-}
-
-func (m *mockScenarioContext) AfterScenario(fn func(*godog.Scenario, error)) {
-    // no-op for test
-}
-
-// ensure mock implements the needed subset
-var _ interface {
-    Step(interface{}, interface{})
-    AfterScenario(func(*godog.Scenario, error))
-} = &mockScenarioContext{}
-
-func TestInitScenarioRegistersSteps(t *testing.T) {
-    mock := &mockScenarioContext{}
-    steps.InitScenario((*godog.ScenarioContext)(mock)) // type conversion for API parity
-
-    expected := []string{
-        `^I want to run the perf test for (\d+) minutes$`,
-        `^I want to hit a target TPS of (\d+)$`,
-        `^I want to hit a target response time of (\d+)ms$`,
-        `^I want a target error rate of (\d+)%$`,
-        `^my api host is "([^"]*)"$`,
-        `^I send a (\w+) request to the endpoint "([^"]*)"$`,
-        `^my headers are stored in "([^"]*)"$`,
-        `^my request body is stored in "([^"]*)"$`,
-        `^I send the request$`,
-        `^the response code is (\d+)$`,
-        `^the "([^"]*)" field has value "([^"]*)"$`,
-    }
-
-    for _, exp := range expected {
-        if _, ok := mock.steps[exp]; !ok {
-            t.Errorf("step %q not registered", exp)
-        }
-    }
-}
-
-func TestSetDurationCallsHandler(t *testing.T) {
-    b := generator.NewJMXBuilder()
-    if err := b.SetDuration(5); err != nil {
-        t.Fatalf("unexpected error: %v", err)
-    }
-    if b.Ctx.Perf.DurSec != 300 {
-        t.Errorf("expected duration 300, got %d", b.Ctx.Perf.DurSec)
-    }
-}
+	for i, pattern := range expectedPatterns {
+		if !reflect.DeepEqual(pattern, mockCtx.registeredSteps[i]) {
+			t.Errorf("expected step[%d] = %s, got %s", i, pattern, mockCtx.registeredSteps[i])
+		}
+	}
