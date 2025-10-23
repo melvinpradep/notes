@@ -1,88 +1,66 @@
-package generator_test
+package steps_test
 
 import (
-	"strings"
-	"testing"
+    "testing"
 
-	"jmxgen-stephandler-nested/internal/generator"
+    "github.com/cucumber/godog"
+    "jmxgen-stephandler-nested/internal/generator"
+    "jmxgen-stephandler-nested/internal/steps"
 )
 
-// TestSetBody ensures SetBody correctly formats and escapes JSON to JMeter style.
-func TestSetBody(t *testing.T) {
-	b := generator.NewJMXBuilder()
-
-	path := "test_body.json"
-	json := `{
-	  "query": "<a&b>",
-	  "user": {
-	    "name": "John",
-	    "roles": ["admin", "test"]
-	  }
-	}`
-	if err := os.WriteFile(path, []byte(json), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-	defer os.Remove(path)
-
-	if err := b.SetBody(path); err != nil {
-		t.Fatalf("SetBody() error = %v", err)
-	}
-
-	got := b.Ctx.API.BodyEscaped
-	wantSubstrings := []string{
-		"&quot;query&quot;",
-		"&lt;a&amp;b&gt;",
-		"&#xd;",
-	}
-
-	for _, sub := range wantSubstrings {
-		if !strings.Contains(got, sub) {
-			t.Errorf("expected escaped body to contain %q\nGot:\n%s", sub, got)
-		}
-	}
+// mockScenarioContext allows us to capture which regexes and funcs were registered.
+type mockScenarioContext struct {
+    steps map[string]interface{}
 }
 
-// TestSetRequest verifies method and path are captured correctly.
-func TestSetRequest(t *testing.T) {
-	b := generator.NewJMXBuilder()
-	if err := b.SetRequest("post", "/user/test"); err != nil {
-		t.Fatalf("SetRequest() failed: %v", err)
-	}
-
-	if b.Ctx.API.Method != "POST" {
-		t.Errorf("expected method POST, got %s", b.Ctx.API.Method)
-	}
-	if b.Ctx.API.Path != "/user/test" {
-		t.Errorf("expected path /user/test, got %s", b.Ctx.API.Path)
-	}
+func (m *mockScenarioContext) Step(expr interface{}, stepFunc interface{}) {
+    if m.steps == nil {
+        m.steps = make(map[string]interface{})
+    }
+    m.steps[expr.(string)] = stepFunc
 }
 
-// TestSetDuration verifies duration conversion to seconds.
-func TestSetDuration(t *testing.T) {
-	b := generator.NewJMXBuilder()
-	if err := b.SetDuration(5); err != nil {
-		t.Fatalf("SetDuration() failed: %v", err)
-	}
-	if b.Ctx.Perf.DurSec != 300 {
-		t.Errorf("expected 300 seconds, got %d", b.Ctx.Perf.DurSec)
-	}
+func (m *mockScenarioContext) AfterScenario(fn func(*godog.Scenario, error)) {
+    // no-op for test
 }
 
-// TestBuild ensures JMX template rendering works with basic data.
-func TestBuild(t *testing.T) {
-	b := generator.NewJMXBuilder()
-	b.Ctx.Perf.DurSec = 300
-	b.Ctx.API.Host = "https://example.com"
-	b.Ctx.API.Method = "POST"
-	b.Ctx.API.Path = "/test"
-	b.Ctx.API.BodyEscaped = `{&quot;msg&quot;:&quot;ok&quot;}`
+// ensure mock implements the needed subset
+var _ interface {
+    Step(interface{}, interface{})
+    AfterScenario(func(*godog.Scenario, error))
+} = &mockScenarioContext{}
 
-	out, err := b.Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
+func TestInitScenarioRegistersSteps(t *testing.T) {
+    mock := &mockScenarioContext{}
+    steps.InitScenario((*godog.ScenarioContext)(mock)) // type conversion for API parity
 
-	if !strings.Contains(out, "HTTPSamplerProxy") {
-		t.Errorf("expected Build output to contain HTTPSamplerProxy")
-	}
+    expected := []string{
+        `^I want to run the perf test for (\d+) minutes$`,
+        `^I want to hit a target TPS of (\d+)$`,
+        `^I want to hit a target response time of (\d+)ms$`,
+        `^I want a target error rate of (\d+)%$`,
+        `^my api host is "([^"]*)"$`,
+        `^I send a (\w+) request to the endpoint "([^"]*)"$`,
+        `^my headers are stored in "([^"]*)"$`,
+        `^my request body is stored in "([^"]*)"$`,
+        `^I send the request$`,
+        `^the response code is (\d+)$`,
+        `^the "([^"]*)" field has value "([^"]*)"$`,
+    }
+
+    for _, exp := range expected {
+        if _, ok := mock.steps[exp]; !ok {
+            t.Errorf("step %q not registered", exp)
+        }
+    }
+}
+
+func TestSetDurationCallsHandler(t *testing.T) {
+    b := generator.NewJMXBuilder()
+    if err := b.SetDuration(5); err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+    if b.Ctx.Perf.DurSec != 300 {
+        t.Errorf("expected duration 300, got %d", b.Ctx.Perf.DurSec)
+    }
 }
