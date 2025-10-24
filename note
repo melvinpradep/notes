@@ -1,3 +1,84 @@
+package steps_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"jmxgen-stephandler/internal/steps"
+
+	"github.com/cucumber/godog"
+)
+
+// mockStepHandler is a stub that records which methods were called.
+type mockStepHandler struct {
+	calls []string
+}
+
+func (m *mockStepHandler) record(name string) error {
+	m.calls = append(m.calls, name)
+	return nil
+}
+
+func (m *mockStepHandler) SetDuration(mins int) error      { return m.record("SetDuration") }
+func (m *mockStepHandler) SetTPS(tps int) error            { return m.record("SetTPS") }
+func (m *mockStepHandler) SetResponse(ms int) error        { return m.record("SetResponse") }
+func (m *mockStepHandler) SetErrorRate(rate int) error     { return m.record("SetErrorRate") }
+func (m *mockStepHandler) SetHost(host string) error       { return m.record("SetHost") }
+func (m *mockStepHandler) SetRequest(mtd, path string) error { return m.record("SetRequest") }
+func (m *mockStepHandler) SetHeaders(path string) error    { return m.record("SetHeaders") }
+func (m *mockStepHandler) SetBody(path string) error       { return m.record("SetBody") }
+func (m *mockStepHandler) SendRequest() error              { return m.record("SendRequest") }
+func (m *mockStepHandler) ExpectCode(code int) error       { return m.record("ExpectCode") }
+func (m *mockStepHandler) AddAssert(path, val string) error { return m.record("AddAssert") }
+
+// mockScenarioContext implements godog.ScenarioContext minimally for tests.
+type mockScenarioContext struct {
+	registeredSteps []string
+	afterFn godog.AfterScenarioHook
+}
+
+func (m *mockScenarioContext) Step(expr interface{}, stepFunc interface{}) {
+	switch e := expr.(type) {
+	case string:
+		m.registeredSteps = append(m.registeredSteps, e)
+	}
+}
+
+func (m *mockScenarioContext) After(godog.AfterScenarioHook) {
+    m.afterFn = func(c context.Context, s *godog.Scenario, e error) (context.Context, error){return c, e}
+}
+
+func (m *mockScenarioContext) BeforeScenario(func(*godog.Scenario)) {}
+func (m *mockScenarioContext) AfterScenario(func(*godog.Scenario, error)) {}
+func (m *mockScenarioContext) BeforeStep(func(*godog.Step)) {}
+func (m *mockScenarioContext) AfterStep(func(*godog.Step, error)) {}
+func (m *mockScenarioContext) BeforeSuite(func()) {}
+func (m *mockScenarioContext) AfterSuite(func())  {}
+
+// ✅ TestInitScenario ensures all expected steps are registered
+func TestInitScenario_StepRegistration(t *testing.T) {
+	mockCtx := &mockScenarioContext{}
+
+	steps.InitScenario(mockCtx)
+
+	expectedPatterns := []string{
+		`^I want to run the perf test for (\d+) minutes$`,
+		`^I want to hit a target TPS of (\d+)$`,
+		`^I want to hit a target response time of (\d+)ms$`,
+		`^I want a target error rate of (\d+)%$`,
+		`^my api host is "([^"]*)"$`,
+		`^I send a (\w+) request to the endpoint "([^"]*)"$`,
+		`^my headers are stored in "([^"]*)"$`,
+		`^my request body is stored in "([^"]*)"$`,
+		`^I send the request$`,
+		`^the response code is (\d+)$`,
+		`^the "([^"]*)" field has value "([^"]*)"$`,
+	}
+
 	if len(mockCtx.registeredSteps) != len(expectedPatterns) {
 		t.Fatalf("expected %d steps, got %d", len(expectedPatterns), len(mockCtx.registeredSteps))
 	}
@@ -7,3 +88,44 @@
 			t.Errorf("expected step[%d] = %s, got %s", i, pattern, mockCtx.registeredSteps[i])
 		}
 	}
+}
+
+func TestInitScenario_AfterHook_GeneratesFile(t *testing.T) {
+    // Prepare a fake environment
+    tmpDir := t.TempDir()
+    os.Setenv("OUT_DIR", tmpDir)
+    os.Setenv("FEATURE_PATH", "./test.feature")
+
+    // Create a dummy feature file
+    os.WriteFile("./test.feature", []byte("Feature: dummy\n Scenario: dummy1\n"), 0644)
+    defer os.Remove("./test.feature")
+
+    mock := &mockScenarioContext{}
+    steps.InitScenario(mock)
+
+    if mock.afterFn == nil {
+        t.Fatal("After() not set")
+    }
+
+    // Invoke the After hook manually
+    _, err := mock.afterFn(context.Background(), &godog.Scenario{Name: "test"}, nil)
+    if err != nil {
+        t.Fatalf("afterFn returned error: %v", err)
+    }
+
+    // Validate output
+    files, _ := os.ReadDir(tmpDir)
+    if len(files) == 0 {
+        t.Fatalf("expected output file to be generated in %s", tmpDir)
+    }
+
+    name := files[0].Name()
+    if !strings.HasSuffix(name, ".jmx") {
+        t.Errorf("expected .jmx file, got %s", name)
+    }
+
+    data, _ := os.ReadFile(filepath.Join(tmpDir, name))
+    if !strings.Contains(string(data), "HTTPSamplerProxy") {
+        t.Errorf("expected file to contain HTTPSamplerProxy, got:\n%s", string(data))
+    }
+}
